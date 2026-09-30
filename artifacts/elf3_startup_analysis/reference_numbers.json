@@ -1,0 +1,88 @@
+{
+  "reference": "/home/robot/GR00T-WholeBodyControl/gear_sonic_deploy/reference/elf3/Neutral_walk_forward_002__A057",
+  "robot_mass_kg": 43.22247589,
+  "first_root_velocity_m_s": [
+    0.06069235,
+    -0.29262584,
+    -0.15149115
+  ],
+  "first_joint_velocity_maxabs_rad_s": 6.87305641,
+  "first_root_roll_pitch_yaw_deg": [
+    -1.9217789177971205,
+    9.004670916463402,
+    -110.02075620626309
+  ],
+  "sampled_frames": [
+    {
+      "frame": 0,
+      "seconds": 0.0,
+      "joint_velocity_rms_rad_s": 1.7353578419520104,
+      "root_horizontal_displacement_m": 0.0,
+      "foot_collision_lowest_z_m": {
+        "l": 0.045759519296393394,
+        "r": 0.05581732276696563
+      }
+    },
+    {
+      "frame": 5,
+      "seconds": 0.1,
+      "joint_velocity_rms_rad_s": 0.9064765326687961,
+      "root_horizontal_displacement_m": 0.03287841502292956,
+      "foot_collision_lowest_z_m": {
+        "l": 0.046625236173055376,
+        "r": 0.08138892472657817
+      }
+    },
+    {
+      "frame": 10,
+      "seconds": 0.2,
+      "joint_velocity_rms_rad_s": 1.1495539025499497,
+      "root_horizontal_displacement_m": 0.07921422891743693,
+      "foot_collision_lowest_z_m": {
+        "l": 0.04645551168010052,
+        "r": 0.05919151871532036
+      }
+    },
+    {
+      "frame": 25,
+      "seconds": 0.5,
+      "joint_velocity_rms_rad_s": 1.8423946308991477,
+      "root_horizontal_displacement_m": 0.3240757273321978,
+      "foot_collision_lowest_z_m": {
+        "l": 0.03645328633283865,
+        "r": 0.030862582520161403
+      }
+    },
+    {
+      "frame": 50,
+      "seconds": 1.0,
+      "joint_velocity_rms_rad_s": 0.9848645117835476,
+      "root_horizontal_displacement_m": 0.7927846894528786,
+      "foot_collision_lowest_z_m": {
+        "l": -0.0016718574553161482,
+        "r": 0.04126925573552334
+      }
+    },
+    {
+      "frame": 75,
+      "seconds": 1.5,
+      "joint_velocity_rms_rad_s": 0.5131459253020804,
+      "root_horizontal_displacement_m": 1.3512395975635512,
+      "foot_collision_lowest_z_m": {
+        "l": 0.042413131108533106,
+        "r": 0.012135016034684643
+      }
+    },
+    {
+      "frame": 100,
+      "seconds": 2.0,
+      "joint_velocity_rms_rad_s": 1.279295681407036,
+      "root_horizontal_displacement_m": 1.9476962115154202,
+      "foot_collision_lowest_z_m": {
+        "l": 0.003490351133375008,
+        "r": 0.03537222493037297
+      }
+    }
+  ],
+  "limitations": "FK of stored reference only; not measured running robot contacts or controller stability."
+}

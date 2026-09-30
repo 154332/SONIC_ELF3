@@ -1,0 +1,24 @@
+{
+  "source": "/home/robot/GR00T-WholeBodyControl/data/elf3_motions/csv/Neutral_walk_forward_002__A057.csv",
+  "source_sha256": "b4edfb7ebf1dce82f42a479dce402dab887e871919840db029be001ede14fbcd",
+  "csv": "/home/robot/GR00T-WholeBodyControl/artifacts/elf3_stand_to_walk/csv/Neutral_stand_to_walk_002__A057.csv",
+  "fps": 120,
+  "frames": 1448,
+  "duration_seconds": 12.058333333333334,
+  "columns": 38,
+  "stand_seconds": 2,
+  "startup_seconds": 2,
+  "walk_source_time_at_startup_end_seconds": 1.0,
+  "joint_limit_violations": {},
+  "first_2s_pose_and_velocity_static": true,
+  "minimum_foot_collision_height_m": 0.0,
+  "stand_foot_heights_m": [
+    0.0,
+    0.0
+  ],
+  "maximum_root_height_correction_m": 0.04274974741306029,
+  "converted_30fps_frames": 362,
+  "original_source_unchanged": true,
+  "physical_contact_or_dynamic_stability_verified": false,
+  "limitations": "Kinematic candidate; no foot planting/IK, contact-force or balance optimization. Root height aligned for all frames, including the walk continuation. Ground correction can introduce velocity changes at contact switches."
+}

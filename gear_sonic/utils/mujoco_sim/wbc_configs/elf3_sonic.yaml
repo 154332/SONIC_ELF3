@@ -1,0 +1,160 @@
+ROBOT_TYPE: "elf3"
+SDK_BRIDGE_ROBOT_TYPE: "g1"
+ROBOT_SCENE: "gear_sonic_deploy/elf3/mjcf/elf3.xml"
+DOMAIN_ID: 0
+INTERFACE: "lo"
+SIMULATOR: "mujoco"
+USE_JOYSTICK: 0
+JOYSTICK_TYPE: "xbox"
+JOYSTICK_DEVICE: 0
+FREE_BASE: false
+PRINT_SCENE_INFORMATION: true
+ENABLE_ELASTIC_BAND: true
+SIMULATE_DT: 0.005
+VIEWER_DT: 0.02
+REWARD_DT: 0.02
+USE_SENSOR: false
+USE_HISTORY: true
+USE_HISTORY_LOCO: true
+USE_HISTORY_MIMIC: true
+GAIT_PERIOD: 0.9
+ROOT_BODY: "torso_link"
+IMU_BODY: "torso_link"
+TRACK_BODY: "torso_link"
+HEAD_POSE_BODY: "head_y_link"
+HEAD_POSE_OFFSET: [0.0, 0.0, 0.0]
+BAND_ATTACHED_BODY: "torso_link"
+FLOATING_BASE_JOINT: "world_joint"
+CONSTRAINED_BASE_JOINT: null
+FALL_HEIGHT: 0.2
+BODY_JOINT_NAMES:
+  - waist_y_joint
+  - waist_x_joint
+  - waist_z_joint
+  - l_hip_y_joint
+  - l_hip_x_joint
+  - l_hip_z_joint
+  - l_knee_y_joint
+  - l_ankle_y_joint
+  - l_ankle_x_joint
+  - r_hip_y_joint
+  - r_hip_x_joint
+  - r_hip_z_joint
+  - r_knee_y_joint
+  - r_ankle_y_joint
+  - r_ankle_x_joint
+  - l_shoulder_y_joint
+  - l_shoulder_x_joint
+  - l_shoulder_z_joint
+  - l_elbow_y_joint
+  - l_wrist_x_joint
+  - l_wrist_y_joint
+  - l_wrist_z_joint
+  - r_shoulder_y_joint
+  - r_shoulder_x_joint
+  - r_shoulder_z_joint
+  - r_elbow_y_joint
+  - r_wrist_x_joint
+  - r_wrist_y_joint
+  - r_wrist_z_joint
+  - head_z_joint
+  - head_y_joint
+MOTOR2JOINT: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+JOINT2MOTOR: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+UNITREE_LEGGED_CONST:
+  HIGHLEVEL: 0xEE
+  LOWLEVEL: 0xFF
+  TRIGERLEVEL: 0xF0
+  PosStopF: 2146000000.0
+  VelStopF: 16000.0
+  MODE_MACHINE: 5
+  MODE_PR: 0
+JOINT_KP: [108.448003, 162.672399, 176.421153, 176.421153, 176.421153, 54.224001, 176.421153, 33.493371, 21.770689, 176.421153, 176.421153, 54.224001, 176.421153, 33.493371, 21.770689, 54.224001, 54.224001, 16.746666, 54.224001, 16.746666, 16.746666, 16.746666, 54.224001, 54.224001, 16.746666, 54.224001, 16.746666, 16.746666, 16.746666, 16.746666, 16.746666]
+JOINT_KD: [6.904014, 10.356047, 11.231319, 11.231319, 11.231319, 3.452007, 11.231319, 2.132254, 1.385965, 11.231319, 11.231319, 3.452007, 11.231319, 2.132254, 1.385965, 3.452007, 3.452007, 1.066126, 3.452007, 1.066126, 1.066126, 1.066126, 3.452007, 3.452007, 1.066126, 3.452007, 1.066126, 1.066126, 1.066126, 1.066126, 1.066126]
+MOTOR_KP: [108.448003, 162.672399, 176.421153, 176.421153, 176.421153, 54.224001, 176.421153, 33.493371, 21.770689, 176.421153, 176.421153, 54.224001, 176.421153, 33.493371, 21.770689, 54.224001, 54.224001, 16.746666, 54.224001, 16.746666, 16.746666, 16.746666, 54.224001, 54.224001, 16.746666, 54.224001, 16.746666, 16.746666, 16.746666, 16.746666, 16.746666]
+MOTOR_KD: [6.904014, 10.356047, 11.231319, 11.231319, 11.231319, 3.452007, 11.231319, 2.132254, 1.385965, 11.231319, 11.231319, 3.452007, 11.231319, 2.132254, 1.385965, 3.452007, 3.452007, 1.066126, 3.452007, 1.066126, 1.066126, 1.066126, 3.452007, 3.452007, 1.066126, 3.452007, 1.066126, 1.066126, 1.066126, 1.066126, 1.066126]
+WeakMotorJointIndex:
+  waist_y_joint: 0
+  waist_x_joint: 1
+  waist_z_joint: 2
+  l_hip_y_joint: 3
+  l_hip_x_joint: 4
+  l_hip_z_joint: 5
+  l_knee_y_joint: 6
+  l_ankle_y_joint: 7
+  l_ankle_x_joint: 8
+  r_hip_y_joint: 9
+  r_hip_x_joint: 10
+  r_hip_z_joint: 11
+  r_knee_y_joint: 12
+  r_ankle_y_joint: 13
+  r_ankle_x_joint: 14
+  l_shoulder_y_joint: 15
+  l_shoulder_x_joint: 16
+  l_shoulder_z_joint: 17
+  l_elbow_y_joint: 18
+  l_wrist_x_joint: 19
+  l_wrist_y_joint: 20
+  l_wrist_z_joint: 21
+  r_shoulder_y_joint: 22
+  r_shoulder_x_joint: 23
+  r_shoulder_z_joint: 24
+  r_elbow_y_joint: 25
+  r_wrist_x_joint: 26
+  r_wrist_y_joint: 27
+  r_wrist_z_joint: 28
+  head_z_joint: 29
+  head_y_joint: 30
+NUM_MOTORS: 31
+NUM_JOINTS: 31
+NUM_HAND_MOTORS: 0
+NUM_HAND_JOINTS: 0
+NUM_UPPER_BODY_JOINTS: 19
+
+# DEFAULT_DOF_ANGLES: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+DEFAULT_DOF_ANGLES:
+  [
+    # waist
+     0.0, 0.0, 0.0,
+
+    # left leg
+    -0.15, 0.0, 0.0,
+     0.30,
+    -0.15, 0.0,
+
+    # right leg
+    -0.15, 0.0, 0.0,
+     0.30,
+    -0.15, 0.0,
+
+    # left arm
+     0.0, 0.0, 0.0, 0.0,
+     0.0, 0.0, 0.0,
+
+    # right arm
+     0.0, 0.0, 0.0, 0.0,
+     0.0, 0.0, 0.0,
+
+    # head
+     0.0, 0.0
+  ]
+DEFAULT_MOTOR_ANGLES: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+motor_pos_lower_limit_list: [-0.5236, -0.2618, -2.8798, -2.8798, -0.48869, -2.8798, -0.087266, -0.87266, -0.34907, -2.8798, -3.0543, -2.8798, -0.087266, -0.87266, -0.34907, -2.8798, -0.34907, -2.8798, -0.95993, -2.8798, -1.309, -0.7854, -2.8798, -3.0543, -2.8798, -0.95993, -2.8798, -1.309, -0.7854, -1.57, -0.7854]
+motor_pos_upper_limit_list: [0.5236, 0.2618, 2.8798, 2.8798, 3.0543, 2.8798, 2.618, 0.7854, 0.34907, 2.8798, 0.48869, 2.8798, 2.618, 0.7854, 0.34907, 2.8798, 3.0543, 2.8798, 1.6581, 2.8798, 1.309, 0.7854, 2.8798, 0.34907, 2.8798, 1.6581, 2.8798, 1.309, 0.7854, 1.57, 0.7854]
+motor_vel_limit_list: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+motor_effort_limit_list: [90.0, 100.0, 150.0, 150.0, 150.0, 45.0, 150.0, 40.0, 15.0, 150.0, 150.0, 45.0, 150.0, 40.0, 15.0, 45.0, 45.0, 21.0, 45.0, 21.0, 21.0, 21.0, 45.0, 45.0, 21.0, 45.0, 21.0, 21.0, 21.0, 21.0, 21.0]
+history_config: {base_ang_vel: 4, projected_gravity: 4, command_lin_vel: 4, command_ang_vel: 4, command_base_height: 4, command_stand: 4, ref_upper_dof_pos: 4, dof_pos: 4, dof_vel: 4, actions: 4, ref_motion_phase: 4, sin_phase: 4, cos_phase: 4}
+history_loco_config: {base_ang_vel: 4, projected_gravity: 4, command_lin_vel: 4, command_ang_vel: 4, command_stand: 4, ref_upper_dof_pos: 4, dof_pos: 4, dof_vel: 4, actions: 4, sin_phase: 4, cos_phase: 4}
+history_loco_height_config: {base_ang_vel: 4, projected_gravity: 4, command_lin_vel: 4, command_ang_vel: 4, command_base_height: 4, command_stand: 4, ref_upper_dof_pos: 4, dof_pos: 4, dof_vel: 4, actions: 4, sin_phase: 4, cos_phase: 4}
+history_mimic_config: {base_ang_vel: 4, projected_gravity: 4, dof_pos: 4, dof_vel: 4, actions: 4, ref_motion_phase: 4}
+obs_dims: {base_lin_vel: 3, base_ang_vel: 3, projected_gravity: 3, command_lin_vel: 2, command_ang_vel: 1, command_stand: 1, command_base_height: 1, ref_upper_dof_pos: 19, dof_pos: 31, dof_vel: 31, actions: 31, phase_time: 1, ref_motion_phase: 1, sin_phase: 1, cos_phase: 1}
+obs_loco_dims: {base_lin_vel: 3, base_ang_vel: 3, projected_gravity: 3, command_lin_vel: 2, command_ang_vel: 1, command_stand: 1, command_base_height: 1, ref_upper_dof_pos: 19, dof_pos: 31, dof_vel: 31, actions: 12, phase_time: 1, sin_phase: 1, cos_phase: 1}
+obs_mimic_dims: {base_lin_vel: 3, base_ang_vel: 3, projected_gravity: 3, dof_pos: 31, dof_vel: 31, actions: 31, ref_motion_phase: 1}
+obs_scales: {base_lin_vel: 2.0, base_ang_vel: 0.25, projected_gravity: 1.0, command_lin_vel: 1.0, command_ang_vel: 1.0, command_stand: 1.0, command_base_height: 2.0, ref_upper_dof_pos: 1.0, dof_pos: 1.0, dof_vel: 0.05, history: 1.0, history_loco: 1.0, history_mimic: 1.0, actions: 1.0, phase_time: 1.0, ref_motion_phase: 1.0, sin_phase: 1.0, cos_phase: 1.0}
+loco_upper_body_dof_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+robot_dofs:
+  elf3: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+mimic_robot_types: {}
+mimic_models: {}
+start_upper_body_dof_pos: {}
+motion_length_s: {}

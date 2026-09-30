@@ -1,0 +1,2 @@
+add_subdirectory(freq_test)
+add_subdirectory(elf3_deploy_onnx_ref)

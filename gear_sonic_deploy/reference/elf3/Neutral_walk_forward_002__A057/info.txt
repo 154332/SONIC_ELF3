@@ -1,0 +1,36 @@
+Motion Information: Neutral_walk_forward_002__A057
+==================================================
+
+Source FPS: 30.0
+Target FPS: 50.0
+
+joint_pos:
+  Shape: (453, 31)
+  Dtype: float32
+  Range: [-0.797761, 1.508693]
+
+joint_vel:
+  Shape: (453, 31)
+  Dtype: float32
+  Range: [-9.887454, 10.995270]
+
+body_pos_w:
+  Shape: (453, 1, 3)
+  Dtype: float32
+  Range: [-8.054718, 1.089050]
+
+body_quat_w:
+  Shape: (453, 1, 4)
+  Dtype: float32
+  Range: [-0.862195, 0.681435]
+
+body_lin_vel_w:
+  Shape: (453, 1, 3)
+  Dtype: float32
+  Range: [-1.323315, 0.264759]
+
+body_ang_vel_w:
+  Shape: (453, 1, 3)
+  Dtype: float32
+  Range: [-1.401416, 0.830424]
+

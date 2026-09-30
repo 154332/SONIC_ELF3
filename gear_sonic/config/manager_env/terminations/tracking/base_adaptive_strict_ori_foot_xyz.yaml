@@ -15,11 +15,11 @@ foot_pos_xyz:
 
 anchor_pos:
   params:
-    threshold: 0.15
+    threshold: 0.20
 
 ee_body_pos:
   params:
-    threshold: 0.15
+    threshold: 0.20
 
 anchor_ori_full:
   params:

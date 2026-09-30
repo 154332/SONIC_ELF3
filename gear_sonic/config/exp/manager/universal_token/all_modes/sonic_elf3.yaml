@@ -1,0 +1,196 @@
+# @package _global_
+# SONIC ELF3 config — 3 encoders (G1/motion tracking, teleop, SMPL) for ELF3.
+# Based on sonic_h2 but targeting the ELF3 robot (32 bodies, 31 DOF).
+
+defaults:
+  - /algo: ppo_im_phc
+  - /manager_env: base_env
+  - /callbacks/read_eval
+  - /callbacks/im_resample
+  - /callbacks/tensorboard
+  - /aux_losses: universal_token/g1_recon_and_all_latent
+  - override /trainer: trl_ppo_aux
+  - override /actor_critic: universal_token/all_mlp_v1
+  - override /manager_env/observations/tokenizer: unitoken_all_noz_elf3
+  - override /manager_env/observations/policy: local_dir_hist
+  - override /manager_env/observations/critic: privileged_mf_hist
+  - override /manager_env/events: tracking/level0_4
+  - override /manager_env/terminations: tracking/base_adaptive_strict_ori_foot_xyz
+  - override /manager_env/rewards: tracking/base_5point_local_feet_acc
+
+use_manager_env: true
+use_wandb: false
+
+exp_base: ${hydra:runtime.choices.exp}
+exp_var: test
+experiment_name: ${exp_base}_${exp_var}
+experiment_dir: ${base_dir}/${project_name}/${experiment_name}-${timestamp}
+
+num_envs: 4096
+project_name: TRL_ELF3_Track
+
+actor_prop_history_length: 10
+actor_actions_history_length: 10
+
+critic_prop_history_length: 10
+critic_actions_history_length: 10
+
+manager_env:
+  rewards:
+    feet_acc:
+      weight: -2.5e-6
+
+    anti_shake_ang_vel:
+      params:
+        body_names: ["l_wrist_z_link", "r_wrist_z_link", "head_y_link"]
+
+    undesired_contacts:
+      params:
+        sensor_cfg:
+          body_names:
+            - "^(?!l_ankle_x_link$)(?!r_ankle_x_link$)(?!l_wrist_z_link$)(?!r_wrist_z_link$)(?!l_elbow_y_link$)(?!r_elbow_y_link$).+$"
+
+  terminations:
+    ee_body_pos:
+      params:
+        body_names:
+          - "l_ankle_x_link"
+          - "r_ankle_x_link"
+          - "l_wrist_z_link"
+          - "r_wrist_z_link"
+
+    foot_pos_xyz:
+      params:
+        body_names:
+          - "l_ankle_x_link"
+          - "r_ankle_x_link"
+
+  config:
+    robot:
+      type: elf3
+    terrain_type: trimesh
+
+  commands:
+    motion:
+      anchor_body: "torso_link"
+
+      vr_3point_body:
+        ["l_wrist_z_link", "r_wrist_z_link", "torso_link"]
+
+      vr_3point_body_offset:
+        [[0.18, -0.025, 0.0], [0.18, 0.025, 0.0], [0.0, 0.0, 0.35]]
+
+      reward_point_body:
+        ["torso_link", "l_wrist_z_link", "r_wrist_z_link"]
+
+      reward_point_body_offset:
+        [[0.0, 0.0, 0.5], [0.0, -0.0, 0.0], [0.0, -0.0, 0.0]]
+
+      # body_names:
+      #   [
+      #     "waist_z_link",
+      #     "l_hip_x_link",
+      #     "l_knee_y_link",
+      #     "l_ankle_x_link",
+      #     "r_hip_x_link",
+      #     "r_knee_y_link",
+      #     "r_ankle_x_link",
+      #     "torso_link",
+      #     "l_shoulder_x_link",
+      #     "l_elbow_y_link",
+      #     "l_wrist_z_link",
+      #     "r_shoulder_x_link",
+      #     "r_elbow_y_link",
+      #     "r_wrist_z_link",
+      #   ]
+
+      body_names:
+        [
+            "torso_link",
+            "waist_z_link",
+            "l_hip_x_link",
+            "l_knee_y_link",
+            "l_ankle_x_link",
+            "r_hip_x_link",
+            "r_knee_y_link",
+            "r_ankle_x_link",
+            "l_shoulder_x_link",
+            "l_elbow_y_link",
+            "l_wrist_z_link",
+            "r_shoulder_x_link",
+            "r_elbow_y_link",
+            "r_wrist_z_link",
+        ]
+
+      num_future_frames: 10
+      dt_future_ref_frames: 0.1
+
+      smpl_num_future_frames: 10
+      smpl_dt_future_ref_frames: 0.02
+
+      cat_upper_body_poses: true
+      cat_upper_body_poses_prob: 0.5
+
+      freeze_frame_aug: true
+      teleop_sample_prob_when_smpl: 0.5
+
+      motion_lib_cfg:
+        adaptive_sampling:
+          adp_samp_failure_rate_max_over_mean: 200
+        motion_file: null
+        smpl_motion_file: dummy
+        smpl_y_up: true
+        asset:
+          assetFileName: "elf3/elf3.xml"
+
+algo:
+  config:
+    empty_cache_every_n_ppo_epoch: -1
+    num_steps_per_env: 24
+    use_clampped_std: true
+    std_clamp_min: 0.001
+    std_clamp_max: 0.5
+    max_grad_norm: 0.1
+
+    actor:
+      backbone:
+        reencode_smpl_g1_recon: true
+
+        encoders:
+          g1:
+            inputs:
+              [
+                "command_multi_future_nonflat",
+                "motion_anchor_ori_b_mf_nonflat",
+              ]
+
+          teleop:
+            inputs:
+              [
+                "command_multi_future_lower_body",
+                "vr_3point_local_target",
+                "vr_3point_local_orn_target",
+                "motion_anchor_ori_b",
+              ]
+
+          smpl:
+            inputs:
+              [
+                "smpl_joints_multi_future_local_nonflat",
+                "smpl_root_ori_b_multi_future",
+                "joint_pos_multi_future_wrist_for_smpl",
+              ]
+
+        decoders:
+          g1_kin:
+            outputs:
+              [
+                "command_multi_future_nonflat",
+                "motion_anchor_ori_b_mf_nonflat",
+              ]
+
+    critic:
+      backbone:
+        module_config_dict:
+          layer_config:
+            hidden_dims: [2048, 2048, 1024, 1024, 512, 512]

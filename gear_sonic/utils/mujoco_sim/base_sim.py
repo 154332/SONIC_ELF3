@@ -1,4 +1,4 @@
-"""MuJoCo simulation environment and loop for the G1 (and H1) humanoid robots.
+"""MuJoCo simulation environment and loop for G1, H1, and ELF3 humanoid robots.
 
 DefaultEnv owns the MuJoCo model/data, computes PD torques from Unitree SDK
 commands, steps physics, and publishes observations back via the SDK bridge.
@@ -51,6 +51,8 @@ class DefaultEnv:
         self.torques = np.zeros(self.num_body_dof + self.num_hand_dof * 2)
         self.torque_limit = np.array(self.robot.MOTOR_EFFORT_LIMIT_LIST)
         self.camera_configs = camera_configs
+        self.renderers = {}
+        self.elastic_band = None
 
         if not camera_configs and offscreen and enable_image_publish:
             self.camera_configs = {
@@ -144,108 +146,126 @@ class DefaultEnv:
 
         return default_dof_properties
 
+    def _joint_ids_from_names(self, names):
+        ids=[]
+        for name in names:
+            joint_id=mujoco.mj_name2id(self.mj_model,mujoco.mjtObj.mjOBJ_JOINT,name)
+            if joint_id < 0:
+                raise ValueError(f"Joint '{name}' not found in MuJoCo model")
+            ids.append(joint_id)
+        return np.asarray(ids,dtype=np.int32)
+
+    def _actuator_ids_from_joint_ids(self, joint_ids):
+        ids=[]
+        for joint_id in joint_ids:
+            matches=np.where(self.mj_model.actuator_trnid[:,0] == joint_id)[0]
+            if len(matches) != 1:
+                joint_name=mujoco.mj_id2name(self.mj_model,mujoco.mjtObj.mjOBJ_JOINT,int(joint_id))
+                raise ValueError(f"Expected exactly one actuator for joint '{joint_name}', found {len(matches)}")
+            ids.append(int(matches[0]))
+        return np.asarray(ids,dtype=np.int32)
+
     def init_scene(self):
-        """Initialize the default robot scene"""
-        xml_path = str(pathlib.Path(GEAR_SONIC_ROOT) / self.config["ROBOT_SCENE"])
-        self.mj_model = mujoco.MjModel.from_xml_path(xml_path)
-        self.mj_data = mujoco.MjData(self.mj_model)
-        self.mj_model.opt.timestep = self.sim_dt
-        self.torso_index = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "torso_link")
-        self.root_body = "pelvis"
-        self.root_body_id = self.mj_model.body(self.root_body).id
-
-        self.joint_class_map = self._get_dof_indices_by_class()
-
-        self.perform_sysid_search = self.config.get("perform_sysid_search", False)
-
-        # Check for static root link (fixed base)
-        self.use_floating_root_link = "floating_base_joint" in [
-            self.mj_model.joint(i).name for i in range(self.mj_model.njnt)
-        ]
-        self.use_constrained_root_link = "constrained_base_joint" in [
-            self.mj_model.joint(i).name for i in range(self.mj_model.njnt)
-        ]
-
-        # MuJoCo qpos/qvel arrays start with root DOFs before joint DOFs:
-        # floating base has 7 qpos (pos + quat) and 6 qvel (lin + ang velocity)
+        """Initialize the robot scene using robot-specific names from the WBC YAML."""
+        xml_path=str(pathlib.Path(GEAR_SONIC_ROOT)/self.config["ROBOT_SCENE"])
+        self.mj_model=mujoco.MjModel.from_xml_path(xml_path)
+        self.mj_data=mujoco.MjData(self.mj_model)
+        self.mj_model.opt.timestep=self.sim_dt
+        self.root_body=self.config.get("ROOT_BODY","pelvis")
+        self.imu_body=self.config.get("IMU_BODY","torso_link")
+        self.track_body=self.config.get("TRACK_BODY",self.root_body)
+        self.head_pose_body=self.config.get("HEAD_POSE_BODY",self.imu_body)
+        self.head_pose_offset=np.asarray(self.config.get("HEAD_POSE_OFFSET",[0.0,0.0,-0.044]),dtype=np.float64)
+        self.root_body_id=mujoco.mj_name2id(self.mj_model,mujoco.mjtObj.mjOBJ_BODY,self.root_body)
+        self.torso_index=mujoco.mj_name2id(self.mj_model,mujoco.mjtObj.mjOBJ_BODY,self.imu_body)
+        if self.root_body_id < 0: raise ValueError(f"ROOT_BODY '{self.root_body}' not found in MuJoCo model")
+        if self.torso_index < 0: raise ValueError(f"IMU_BODY '{self.imu_body}' not found in MuJoCo model")
+        self.joint_class_map=self._get_dof_indices_by_class()
+        self.perform_sysid_search=self.config.get("perform_sysid_search",False)
+        joint_names=[self.mj_model.joint(i).name for i in range(self.mj_model.njnt)]
+        floating_base_joint=self.config.get("FLOATING_BASE_JOINT","floating_base_joint")
+        constrained_base_joint=self.config.get("CONSTRAINED_BASE_JOINT","constrained_base_joint")
+        self.use_floating_root_link=bool(floating_base_joint) and floating_base_joint in joint_names
+        self.use_constrained_root_link=bool(constrained_base_joint) and constrained_base_joint in joint_names
+        self.root_joint_id=-1
         if self.use_floating_root_link:
-            self.qpos_offset = 7
-            self.qvel_offset = 6
+            self.root_joint_id=mujoco.mj_name2id(self.mj_model,mujoco.mjtObj.mjOBJ_JOINT,floating_base_joint)
+            if self.mj_model.jnt_type[self.root_joint_id] != mujoco.mjtJoint.mjJNT_FREE:
+                raise ValueError(f"FLOATING_BASE_JOINT '{floating_base_joint}' exists but is not a free joint")
+            self.root_qpos_adr=int(self.mj_model.jnt_qposadr[self.root_joint_id])
+            self.root_dof_adr=int(self.mj_model.jnt_dofadr[self.root_joint_id])
+            self.qpos_offset=7
+            self.qvel_offset=6
+        elif self.use_constrained_root_link:
+            self.root_joint_id=mujoco.mj_name2id(self.mj_model,mujoco.mjtObj.mjOBJ_JOINT,constrained_base_joint)
+            self.root_qpos_adr=int(self.mj_model.jnt_qposadr[self.root_joint_id])
+            self.root_dof_adr=int(self.mj_model.jnt_dofadr[self.root_joint_id])
+            self.qpos_offset=1
+            self.qvel_offset=1
         else:
-            if self.use_constrained_root_link:
-                self.qpos_offset = 1
-                self.qvel_offset = 1
-            else:
-                raise ValueError(
-                    "No root link found --"
-                    "The absolute static root will make the simulation unstable."
-                )
-
-        # Enable the elastic band
+            raise ValueError(f"No configured root joint found. FLOATING_BASE_JOINT={floating_base_joint!r}, CONSTRAINED_BASE_JOINT={constrained_base_joint!r}")
         if self.config["ENABLE_ELASTIC_BAND"] and self.use_floating_root_link:
-            self.elastic_band = ElasticBand()
-            if "g1" in self.config["ROBOT_TYPE"]:
-                if self.config["enable_waist"]:
-                    self.band_attached_link = self.mj_model.body("pelvis").id
-                else:
-                    self.band_attached_link = self.mj_model.body("torso_link").id
-            elif "h1" in self.config["ROBOT_TYPE"]:
-                self.band_attached_link = self.mj_model.body("torso_link").id
-            else:
-                self.band_attached_link = self.mj_model.body("base_link").id
-
+            self.elastic_band=ElasticBand()
+            band_body=self.config.get("BAND_ATTACHED_BODY",self.root_body)
+            self.band_attached_link=mujoco.mj_name2id(self.mj_model,mujoco.mjtObj.mjOBJ_BODY,band_body)
+            if self.band_attached_link < 0: raise ValueError(f"BAND_ATTACHED_BODY '{band_body}' not found in MuJoCo model")
             if self.onscreen:
-                self.viewer = mujoco.viewer.launch_passive(
-                    self.mj_model,
-                    self.mj_data,
-                    key_callback=self.elastic_band.MujuocoKeyCallback,
-                    show_left_ui=False,
-                    show_right_ui=False,
-                )
+                self.viewer=mujoco.viewer.launch_passive(self.mj_model,self.mj_data,key_callback=self.elastic_band.MujuocoKeyCallback,show_left_ui=False,show_right_ui=False)
             else:
-                mujoco.mj_forward(self.mj_model, self.mj_data)
-                self.viewer = None
+                mujoco.mj_forward(self.mj_model,self.mj_data)
+                self.viewer=None
         else:
+            self.elastic_band=None
             if self.onscreen:
-                self.viewer = mujoco.viewer.launch_passive(
-                    self.mj_model, self.mj_data, show_left_ui=False, show_right_ui=False
-                )
+                self.viewer=mujoco.viewer.launch_passive(self.mj_model,self.mj_data,show_left_ui=False,show_right_ui=False)
             else:
-                mujoco.mj_forward(self.mj_model, self.mj_data)
-                self.viewer = None
-
+                mujoco.mj_forward(self.mj_model,self.mj_data)
+                self.viewer=None
         if self.viewer:
-            self.viewer.cam.azimuth = 120
-            self.viewer.cam.elevation = -30
-            self.viewer.cam.distance = 2.0
-            self.viewer.cam.lookat = np.array([0, 0, 0.5])
-            self.viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
-            self.viewer.cam.trackbodyid = self.mj_model.body("pelvis").id
-
-        self.body_joint_index = []
-        self.left_hand_index = []
-        self.right_hand_index = []
-        for i in range(self.mj_model.njnt):
-            name = self.mj_model.joint(i).name
-            if any(
-                [
-                    part_name in name
-                    for part_name in ["hip", "knee", "ankle", "waist", "shoulder", "elbow", "wrist"]
-                ]
-            ):
-                self.body_joint_index.append(i)
-            elif "left_hand" in name:
-                self.left_hand_index.append(i)
-            elif "right_hand" in name:
-                self.right_hand_index.append(i)
-
-        assert len(self.body_joint_index) == self.robot.NUM_JOINTS
-        assert len(self.left_hand_index) == self.robot.NUM_HAND_JOINTS
-        assert len(self.right_hand_index) == self.robot.NUM_HAND_JOINTS
-
-        self.body_joint_index = np.array(self.body_joint_index)
-        self.left_hand_index = np.array(self.left_hand_index)
-        self.right_hand_index = np.array(self.right_hand_index)
+            self.viewer.cam.azimuth=120
+            self.viewer.cam.elevation=-30
+            self.viewer.cam.distance=2.0
+            self.viewer.cam.lookat=np.array([0,0,0.5])
+            self.viewer.cam.type=mujoco.mjtCamera.mjCAMERA_TRACKING
+            track_body_id=mujoco.mj_name2id(self.mj_model,mujoco.mjtObj.mjOBJ_BODY,self.track_body)
+            if track_body_id < 0: raise ValueError(f"TRACK_BODY '{self.track_body}' not found in MuJoCo model")
+            self.viewer.cam.trackbodyid=track_body_id
+        body_joint_names=self.config.get("BODY_JOINT_NAMES")
+        if body_joint_names:
+            self.body_joint_index=self._joint_ids_from_names(body_joint_names)
+        else:
+            body_joint_ids=[]
+            for i in range(self.mj_model.njnt):
+                name=self.mj_model.joint(i).name or ""
+                if any(part_name in name for part_name in ["hip","knee","ankle","waist","shoulder","elbow","wrist"]): body_joint_ids.append(i)
+            self.body_joint_index=np.asarray(body_joint_ids,dtype=np.int32)
+        left_hand_names=self.config.get("LEFT_HAND_JOINT_NAMES") or []
+        right_hand_names=self.config.get("RIGHT_HAND_JOINT_NAMES") or []
+        if left_hand_names:
+            self.left_hand_index=self._joint_ids_from_names(left_hand_names)
+        else:
+            self.left_hand_index=np.asarray([i for i in range(self.mj_model.njnt) if "left_hand" in (self.mj_model.joint(i).name or "")],dtype=np.int32)
+        if right_hand_names:
+            self.right_hand_index=self._joint_ids_from_names(right_hand_names)
+        else:
+            self.right_hand_index=np.asarray([i for i in range(self.mj_model.njnt) if "right_hand" in (self.mj_model.joint(i).name or "")],dtype=np.int32)
+        if len(self.body_joint_index) != self.robot.NUM_JOINTS:
+            names=[self.mj_model.joint(int(i)).name for i in self.body_joint_index]
+            raise ValueError(f"Body joint count mismatch: expected {self.robot.NUM_JOINTS}, got {len(self.body_joint_index)}. Joints={names}")
+        if len(self.left_hand_index) != self.robot.NUM_HAND_JOINTS: raise ValueError(f"Left hand joint count mismatch: expected {self.robot.NUM_HAND_JOINTS}, got {len(self.left_hand_index)}")
+        if len(self.right_hand_index) != self.robot.NUM_HAND_JOINTS: raise ValueError(f"Right hand joint count mismatch: expected {self.robot.NUM_HAND_JOINTS}, got {len(self.right_hand_index)}")
+        self.body_qpos_index=np.asarray([self.mj_model.jnt_qposadr[int(i)] for i in self.body_joint_index],dtype=np.int32)
+        self.body_dof_index=np.asarray([self.mj_model.jnt_dofadr[int(i)] for i in self.body_joint_index],dtype=np.int32)
+        self.body_actuator_index=self._actuator_ids_from_joint_ids(self.body_joint_index)
+        self.left_hand_qpos_index=np.asarray([self.mj_model.jnt_qposadr[int(i)] for i in self.left_hand_index],dtype=np.int32)
+        self.left_hand_dof_index=np.asarray([self.mj_model.jnt_dofadr[int(i)] for i in self.left_hand_index],dtype=np.int32)
+        self.right_hand_qpos_index=np.asarray([self.mj_model.jnt_qposadr[int(i)] for i in self.right_hand_index],dtype=np.int32)
+        self.right_hand_dof_index=np.asarray([self.mj_model.jnt_dofadr[int(i)] for i in self.right_hand_index],dtype=np.int32)
+        self.left_hand_actuator_index=self._actuator_ids_from_joint_ids(self.left_hand_index) if len(self.left_hand_index) else np.asarray([],dtype=np.int32)
+        self.right_hand_actuator_index=self._actuator_ids_from_joint_ids(self.right_hand_index) if len(self.right_hand_index) else np.asarray([],dtype=np.int32)
+        expected_actuators=self.num_body_dof+self.num_hand_dof*2
+        if self.mj_model.nu != expected_actuators and not self.config.get("FREE_BASE",False):
+            raise ValueError(f"Actuator count mismatch: model has {self.mj_model.nu}, config expects {expected_actuators}")
 
     def init_renderers(self):
         self.renderers = {}
@@ -256,79 +276,34 @@ class DefaultEnv:
             self.renderers[camera_name] = renderer
 
     def compute_body_torques(self) -> np.ndarray:
-        # PD control: tau = tau_ff + kp * (q_des - q) + kd * (dq_des - dq)
-        body_torques = np.zeros(self.num_body_dof)
+        body_torques=np.zeros(self.num_body_dof)
         if self.unitree_bridge is not None and self.unitree_bridge.low_cmd:
             for i in range(self.unitree_bridge.num_body_motor):
                 if self.unitree_bridge.use_sensor:
-                    body_torques[i] = (
-                        self.unitree_bridge.low_cmd.motor_cmd[i].tau
-                        + self.unitree_bridge.low_cmd.motor_cmd[i].kp
-                        * (self.unitree_bridge.low_cmd.motor_cmd[i].q - self.mj_data.sensordata[i])
-                        + self.unitree_bridge.low_cmd.motor_cmd[i].kd
-                        * (
-                            self.unitree_bridge.low_cmd.motor_cmd[i].dq
-                            - self.mj_data.sensordata[i + self.unitree_bridge.num_body_motor]
-                        )
-                    )
+                    body_torques[i]=self.unitree_bridge.low_cmd.motor_cmd[i].tau+self.unitree_bridge.low_cmd.motor_cmd[i].kp*(self.unitree_bridge.low_cmd.motor_cmd[i].q-self.mj_data.sensordata[i])+self.unitree_bridge.low_cmd.motor_cmd[i].kd*(self.unitree_bridge.low_cmd.motor_cmd[i].dq-self.mj_data.sensordata[i+self.unitree_bridge.num_body_motor])
                 else:
-                    body_torques[i] = (
-                        self.unitree_bridge.low_cmd.motor_cmd[i].tau
-                        + self.unitree_bridge.low_cmd.motor_cmd[i].kp
-                        * (
-                            self.unitree_bridge.low_cmd.motor_cmd[i].q
-                            - self.mj_data.qpos[self.body_joint_index[i] + self.qpos_offset - 1]
-                        )
-                        + self.unitree_bridge.low_cmd.motor_cmd[i].kd
-                        * (
-                            self.unitree_bridge.low_cmd.motor_cmd[i].dq
-                            - self.mj_data.qvel[self.body_joint_index[i] + self.qvel_offset - 1]
-                        )
-                    )
+                    body_torques[i]=self.unitree_bridge.low_cmd.motor_cmd[i].tau+self.unitree_bridge.low_cmd.motor_cmd[i].kp*(self.unitree_bridge.low_cmd.motor_cmd[i].q-self.mj_data.qpos[self.body_qpos_index[i]])+self.unitree_bridge.low_cmd.motor_cmd[i].kd*(self.unitree_bridge.low_cmd.motor_cmd[i].dq-self.mj_data.qvel[self.body_dof_index[i]])
         return body_torques
 
     def get_head_pose(self) -> np.ndarray:
-        root_pos = self.mj_data.body("torso_link").xpos.copy()
-        # Reorder quaternion from MuJoCo [w,x,y,z] to scipy [x,y,z,w]
-        root_quat = self.mj_data.body("torso_link").xquat.copy()[[1, 2, 3, 0]]
-        head_pos = root_pos + Rotation.from_quat(root_quat).apply(np.array([0.0, 0.0, -0.044]))
-        return np.concatenate((head_pos, root_quat))
+        body=self.mj_data.body(self.head_pose_body)
+        head_pos=body.xpos.copy()
+        head_quat=body.xquat.copy()[[1,2,3,0]]
+        if np.any(self.head_pose_offset): head_pos=head_pos+Rotation.from_quat(head_quat).apply(self.head_pose_offset)
+        return np.concatenate((head_pos,head_quat))
 
     def get_root_vel(self) -> np.ndarray:
-        return self.mj_data.qvel[:6]
+        if self.use_floating_root_link: return self.mj_data.qvel[self.root_dof_adr:self.root_dof_adr+6].copy()
+        return np.zeros(6)
 
     def compute_hand_torques(self) -> np.ndarray:
-        left_hand_torques = np.zeros(self.num_hand_dof)
-        right_hand_torques = np.zeros(self.num_hand_dof)
+        left_hand_torques=np.zeros(self.num_hand_dof)
+        right_hand_torques=np.zeros(self.num_hand_dof)
         if self.unitree_bridge is not None and self.unitree_bridge.low_cmd:
             for i in range(self.unitree_bridge.num_hand_motor):
-                left_hand_torques[i] = (
-                    self.unitree_bridge.left_hand_cmd.motor_cmd[i].tau
-                    + self.unitree_bridge.left_hand_cmd.motor_cmd[i].kp
-                    * (
-                        self.unitree_bridge.left_hand_cmd.motor_cmd[i].q
-                        - self.mj_data.qpos[self.left_hand_index[i] + self.qpos_offset - 1]
-                    )
-                    + self.unitree_bridge.left_hand_cmd.motor_cmd[i].kd
-                    * (
-                        self.unitree_bridge.left_hand_cmd.motor_cmd[i].dq
-                        - self.mj_data.qvel[self.left_hand_index[i] + self.qvel_offset - 1]
-                    )
-                )
-                right_hand_torques[i] = (
-                    self.unitree_bridge.right_hand_cmd.motor_cmd[i].tau
-                    + self.unitree_bridge.right_hand_cmd.motor_cmd[i].kp
-                    * (
-                        self.unitree_bridge.right_hand_cmd.motor_cmd[i].q
-                        - self.mj_data.qpos[self.right_hand_index[i] + self.qpos_offset - 1]
-                    )
-                    + self.unitree_bridge.right_hand_cmd.motor_cmd[i].kd
-                    * (
-                        self.unitree_bridge.right_hand_cmd.motor_cmd[i].dq
-                        - self.mj_data.qvel[self.right_hand_index[i] + self.qvel_offset - 1]
-                    )
-                )
-        return np.concatenate((left_hand_torques, right_hand_torques))
+                left_hand_torques[i]=self.unitree_bridge.left_hand_cmd.motor_cmd[i].tau+self.unitree_bridge.left_hand_cmd.motor_cmd[i].kp*(self.unitree_bridge.left_hand_cmd.motor_cmd[i].q-self.mj_data.qpos[self.left_hand_qpos_index[i]])+self.unitree_bridge.left_hand_cmd.motor_cmd[i].kd*(self.unitree_bridge.left_hand_cmd.motor_cmd[i].dq-self.mj_data.qvel[self.left_hand_dof_index[i]])
+                right_hand_torques[i]=self.unitree_bridge.right_hand_cmd.motor_cmd[i].tau+self.unitree_bridge.right_hand_cmd.motor_cmd[i].kp*(self.unitree_bridge.right_hand_cmd.motor_cmd[i].q-self.mj_data.qpos[self.right_hand_qpos_index[i]])+self.unitree_bridge.right_hand_cmd.motor_cmd[i].kd*(self.unitree_bridge.right_hand_cmd.motor_cmd[i].dq-self.mj_data.qvel[self.right_hand_dof_index[i]])
+        return np.concatenate((left_hand_torques,right_hand_torques))
 
     def compute_body_qpos(self) -> np.ndarray:
         body_qpos = np.zeros(self.num_body_dof)
@@ -346,89 +321,59 @@ class DefaultEnv:
         return hand_qpos
 
     def prepare_obs(self) -> Dict[str, any]:
-        obs = {}
+        obs={}
         if self.use_floating_root_link:
-            obs["floating_base_pose"] = self.mj_data.qpos[:7]
-            obs["floating_base_vel"] = self.mj_data.qvel[:6]
-            obs["floating_base_acc"] = self.mj_data.qacc[:6]
+            obs["floating_base_pose"]=self.mj_data.qpos[self.root_qpos_adr:self.root_qpos_adr+7].copy()
+            obs["floating_base_vel"]=self.mj_data.qvel[self.root_dof_adr:self.root_dof_adr+6].copy()
+            obs["floating_base_acc"]=self.mj_data.qacc[self.root_dof_adr:self.root_dof_adr+6].copy()
         else:
-            obs["floating_base_pose"] = np.zeros(7)
-            obs["floating_base_vel"] = np.zeros(6)
-            obs["floating_base_acc"] = np.zeros(6)
-
-        obs["secondary_imu_quat"] = self.mj_data.xquat[self.torso_index]
-
-        pose = np.zeros(13)
-        torso_link = self.mj_model.body("torso_link").id
-        # mj_objectVelocity returns [ang_vel, lin_vel]; swap to [lin_vel, ang_vel]
-        mujoco.mj_objectVelocity(
-            self.mj_model, self.mj_data, mujoco.mjtObj.mjOBJ_BODY, torso_link, pose[7:13], 1
-        )
-        pose[7:10], pose[10:13] = (
-            pose[10:13],
-            pose[7:10].copy(),
-        )
-        obs["secondary_imu_vel"] = pose[7:13]
-
-        obs["body_q"] = self.mj_data.qpos[self.body_joint_index + 7 - 1]
-        obs["body_dq"] = self.mj_data.qvel[self.body_joint_index + 6 - 1]
-        obs["body_ddq"] = self.mj_data.qacc[self.body_joint_index + 6 - 1]
-        obs["body_tau_est"] = self.mj_data.actuator_force[self.body_joint_index - 1]
+            obs["floating_base_pose"]=np.zeros(7)
+            obs["floating_base_vel"]=np.zeros(6)
+            obs["floating_base_acc"]=np.zeros(6)
+        obs["secondary_imu_quat"]=self.mj_data.xquat[self.torso_index].copy()
+        pose=np.zeros(13)
+        mujoco.mj_objectVelocity(self.mj_model,self.mj_data,mujoco.mjtObj.mjOBJ_BODY,self.torso_index,pose[7:13],1)
+        pose[7:10],pose[10:13]=pose[10:13],pose[7:10].copy()
+        obs["secondary_imu_vel"]=pose[7:13]
+        obs["body_q"]=self.mj_data.qpos[self.body_qpos_index].copy()
+        obs["body_dq"]=self.mj_data.qvel[self.body_dof_index].copy()
+        obs["body_ddq"]=self.mj_data.qacc[self.body_dof_index].copy()
+        obs["body_tau_est"]=self.mj_data.actuator_force[self.body_actuator_index].copy()
         if self.num_hand_dof > 0:
-            obs["left_hand_q"] = self.mj_data.qpos[self.left_hand_index + self.qpos_offset - 1]
-            obs["left_hand_dq"] = self.mj_data.qvel[self.left_hand_index + self.qvel_offset - 1]
-            obs["left_hand_ddq"] = self.mj_data.qacc[self.left_hand_index + self.qvel_offset - 1]
-            obs["left_hand_tau_est"] = self.mj_data.actuator_force[self.left_hand_index - 1]
-            obs["right_hand_q"] = self.mj_data.qpos[self.right_hand_index + self.qpos_offset - 1]
-            obs["right_hand_dq"] = self.mj_data.qvel[self.right_hand_index + self.qvel_offset - 1]
-            obs["right_hand_ddq"] = self.mj_data.qacc[self.right_hand_index + self.qvel_offset - 1]
-            obs["right_hand_tau_est"] = self.mj_data.actuator_force[self.right_hand_index - 1]
-        obs["time"] = self.mj_data.time
+            obs["left_hand_q"]=self.mj_data.qpos[self.left_hand_qpos_index].copy()
+            obs["left_hand_dq"]=self.mj_data.qvel[self.left_hand_dof_index].copy()
+            obs["left_hand_ddq"]=self.mj_data.qacc[self.left_hand_dof_index].copy()
+            obs["left_hand_tau_est"]=self.mj_data.actuator_force[self.left_hand_actuator_index].copy()
+            obs["right_hand_q"]=self.mj_data.qpos[self.right_hand_qpos_index].copy()
+            obs["right_hand_dq"]=self.mj_data.qvel[self.right_hand_dof_index].copy()
+            obs["right_hand_ddq"]=self.mj_data.qacc[self.right_hand_dof_index].copy()
+            obs["right_hand_tau_est"]=self.mj_data.actuator_force[self.right_hand_actuator_index].copy()
+        obs["time"]=self.mj_data.time
         return obs
 
     def sim_step(self):
-        self.obs = self.prepare_obs()
+        self.obs=self.prepare_obs()
         self.unitree_bridge.PublishLowState(self.obs)
-        if self.unitree_bridge.joystick:
-            self.unitree_bridge.PublishWirelessController()
+        if self.unitree_bridge.joystick: self.unitree_bridge.PublishWirelessController()
         if self.elastic_band:
             if self.elastic_band.enable and self.use_floating_root_link:
-                pose = np.concatenate(
-                    [
-                        self.mj_data.xpos[self.band_attached_link],
-                        self.mj_data.xquat[self.band_attached_link],
-                        np.zeros(6),
-                    ]
-                )
-                mujoco.mj_objectVelocity(
-                    self.mj_model,
-                    self.mj_data,
-                    mujoco.mjtObj.mjOBJ_BODY,
-                    self.band_attached_link,
-                    pose[7:13],
-                    0,
-                )
-                pose[7:10], pose[10:13] = pose[10:13], pose[7:10].copy()
-                self.mj_data.xfrc_applied[self.band_attached_link] = self.elastic_band.Advance(pose)
+                pose=np.concatenate([self.mj_data.xpos[self.band_attached_link],self.mj_data.xquat[self.band_attached_link],np.zeros(6)])
+                mujoco.mj_objectVelocity(self.mj_model,self.mj_data,mujoco.mjtObj.mjOBJ_BODY,self.band_attached_link,pose[7:13],0)
+                pose[7:10],pose[10:13]=pose[10:13],pose[7:10].copy()
+                self.mj_data.xfrc_applied[self.band_attached_link]=self.elastic_band.Advance(pose)
             else:
-                self.mj_data.xfrc_applied[self.band_attached_link] = np.zeros(6)
-        body_torques = self.compute_body_torques()
-        hand_torques = self.compute_hand_torques()
-        # -1: actuator array is 0-based while joint indices from the model are 1-based
-        self.torques[self.body_joint_index - 1] = body_torques
+                self.mj_data.xfrc_applied[self.band_attached_link]=np.zeros(6)
+        body_torques=self.compute_body_torques()
+        hand_torques=self.compute_hand_torques()
+        self.torques.fill(0.0)
+        self.torques[self.body_actuator_index]=body_torques
         if self.num_hand_dof > 0:
-            self.torques[self.left_hand_index - 1] = hand_torques[: self.num_hand_dof]
-            self.torques[self.right_hand_index - 1] = hand_torques[self.num_hand_dof :]
-
-        self.torques = np.clip(self.torques, -self.torque_limit, self.torque_limit)
-
-        if self.config["FREE_BASE"]:
-            # Prepend 6 zeros for the floating-base root DOF actuators
-            self.mj_data.ctrl = np.concatenate((np.zeros(6), self.torques))
-        else:
-            self.mj_data.ctrl = self.torques
-        mujoco.mj_step(self.mj_model, self.mj_data)
-
+            self.torques[self.left_hand_actuator_index]=hand_torques[:self.num_hand_dof]
+            self.torques[self.right_hand_actuator_index]=hand_torques[self.num_hand_dof:]
+        self.torques=np.clip(self.torques,-self.torque_limit,self.torque_limit)
+        if self.config["FREE_BASE"]: self.mj_data.ctrl=np.concatenate((np.zeros(6),self.torques))
+        else: self.mj_data.ctrl=self.torques
+        mujoco.mj_step(self.mj_model,self.mj_data)
         self.check_fall()
 
     def apply_perturbation(self, key):
@@ -506,12 +451,9 @@ class DefaultEnv:
             self.apply_perturbation(key)
 
     def check_fall(self):
-        self.fall = False
-        if self.mj_data.qpos[2] < 0.2:
-            self.fall = True
-            print(f"Warning: Robot has fallen, height: {self.mj_data.qpos[2]:.3f} m")
-
+        self.fall=self.mj_data.body(self.root_body).xpos[2] < float(self.config.get("FALL_HEIGHT",0.2))
         if self.fall:
+            print(f"Warning: Robot has fallen, height: {self.mj_data.body(self.root_body).xpos[2]:.3f} m")
             self.reset()
 
     def check_self_collision(self):
@@ -589,11 +531,11 @@ class BaseSimulator:
         pass
 
     def init_unitree_bridge(self):
-        self.unitree_bridge = UnitreeSdk2Bridge(self.config)
+        bridge_config=dict(self.config)
+        bridge_config["ROBOT_TYPE"]=self.config.get("SDK_BRIDGE_ROBOT_TYPE",self.config["ROBOT_TYPE"])
+        self.unitree_bridge=UnitreeSdk2Bridge(bridge_config)
         if self.config["USE_JOYSTICK"]:
-            self.unitree_bridge.SetupJoystick(
-                device_id=self.config["JOYSTICK_DEVICE"], js_type=self.config["JOYSTICK_TYPE"]
-            )
+            self.unitree_bridge.SetupJoystick(device_id=self.config["JOYSTICK_DEVICE"],js_type=self.config["JOYSTICK_TYPE"])
 
     def start(self):
         """Main simulation loop"""

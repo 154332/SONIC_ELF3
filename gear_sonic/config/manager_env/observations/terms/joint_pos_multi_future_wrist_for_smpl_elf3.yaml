@@ -1,0 +1,13 @@
+joint_pos_multi_future_wrist_for_smpl:
+  _target_: isaaclab.managers.ObservationTermCfg
+  func: gear_sonic.envs.manager_env.mdp:joint_pos_multi_future_select_joints_for_smpl
+  params:
+    command_name: "motion"
+    joints_idx: [15, 16, 19, 20, 23, 24]
+    # ELF3 wrist joints in IsaacLab / motion-library order:
+    # 15: l_wrist_x_joint
+    # 16: r_wrist_x_joint
+    # 19: l_wrist_y_joint
+    # 20: r_wrist_y_joint
+    # 23: l_wrist_z_joint
+    # 24: r_wrist_z_joint

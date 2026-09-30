@@ -1,0 +1,3 @@
+tensorboard:
+  _target_: gear_sonic.trl.callbacks.tensorboard_callback.TensorBoardCallback
+  log_dir: ${experiment_dir}/tensorboard

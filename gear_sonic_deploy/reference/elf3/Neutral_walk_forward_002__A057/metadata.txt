@@ -1,0 +1,7 @@
+Metadata for: Neutral_walk_forward_002__A057
+==============================
+
+Body part indexes:
+[0]
+
+Total timesteps: 453

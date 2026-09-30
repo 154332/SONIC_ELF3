@@ -1,0 +1,32 @@
+{
+  "objective/length": {
+    "last_step": 10000,
+    "last": 243.2899932861328,
+    "mean_last_100": 238.70679885864257
+  },
+  "Env/Episode_Termination/time_out": {
+    "last_step": 10000,
+    "last": 0.537841796875,
+    "mean_last_100": 0.5496997076272965
+  },
+  "Env/Episode_Termination/foot_pos_xyz": {
+    "last_step": 10000,
+    "last": 0.4315592348575592,
+    "mean_last_100": 0.4273685696721077
+  },
+  "Env/Episode_Termination/anchor_ori_full": {
+    "last_step": 10000,
+    "last": 0.0328776054084301,
+    "mean_last_100": 0.0252315267175436
+  },
+  "Env/Metrics/motion/error_joint_vel": {
+    "last_step": 10000,
+    "last": 1.590659260749817,
+    "mean_last_100": 1.5462302327156068
+  },
+  "Env/Metrics/motion/error_anchor_lin_vel": {
+    "last_step": 10000,
+    "last": 0.5914117097854614,
+    "mean_last_100": 0.5635740804672241
+  }
+}

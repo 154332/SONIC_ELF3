@@ -1,0 +1,39 @@
+{
+  "csv": "Neutral_stand_2s_elf3.csv",
+  "source_fps": 120,
+  "frames": 241,
+  "timestamp_span_seconds": 2.0,
+  "columns": 38,
+  "joints": 31,
+  "root_height_m": 1.0553134898790673,
+  "foot_minimum_z_m": {
+    "l": 9.194034422677078e-17,
+    "r": 9.194034422677078e-17
+  },
+  "com_m": [
+    0.02209162110036739,
+    -0.000130928903425744,
+    0.7872637996043258
+  ],
+  "all_joint_limits_passed": true,
+  "all_pose_frames_identical": true,
+  "finite_difference_reference_velocities_zero": true,
+  "dynamic_stability_tested": false,
+  "requested_walk_source_csv_available": false,
+  "existing_converter_validation": {
+    "fps_source": 120,
+    "fps_target": 30,
+    "frames": 61,
+    "timestamp_span_seconds": 2.0,
+    "dof_shape": [
+      61,
+      31
+    ],
+    "pose_aa_shape": [
+      61,
+      32,
+      3
+    ],
+    "passed": true
+  }
+}

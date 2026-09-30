@@ -1,0 +1,478 @@
+--- a/gear_sonic_deploy/deploy_elf3.sh
++++ b/gear_sonic_deploy/deploy_elf3.sh
+@@ -124,11 +124,13 @@
+     echo "  --zmq-host HOST             Default: localhost"
+     echo "  --motor-kp-scale SPEC"
+     echo "  --motor-kd-scale SPEC"
++    echo "  --reference-blend-duration SECONDS  Normal-mode playback fade, default: 1.0; 0 disables"
+     echo ""
+     echo "Examples:"
+     echo "  $0 sim"
+     echo "  $0 --motion-data reference/elf3 sim"
+     echo "  $0 --cp policy/elf3/model_step_002350 sim"
++    echo "  $0 --reference-blend-duration 1.0 --no-planner sim"
+     echo "  $0 --planner planner/custom.onnx --input-type manager sim"
+ }
+ 
+@@ -150,6 +152,7 @@
+ ZMQ_HOST="$ZMQ_HOST_DEFAULT"
+ MOTOR_KP_SCALES=()
+ MOTOR_KD_SCALES=()
++REFERENCE_BLEND_DURATION="1.0"
+ 
+ while [[ $# -gt 0 ]]; do
+     case "$1" in
+@@ -204,6 +207,16 @@
+         --motor-kd-scale)
+             [[ -z "${2:-}" ]] && { echo "ERROR: --motor-kd-scale requires <motor-list>=<factor>"; exit 1; }
+             MOTOR_KD_SCALES+=("$2")
++            shift 2
++            ;;
++        --reference-blend-duration)
++            [[ -z "${2:-}" ]] && { echo "ERROR: --reference-blend-duration requires seconds"; exit 1; }
++            REFERENCE_BLEND_DURATION="$2"
++            # The C++ parser also rejects non-finite values and numeric overflow.
++            if [[ ! "$REFERENCE_BLEND_DURATION" =~ ^\+?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$ ]]; then
++                echo "ERROR: --reference-blend-duration must be a non-negative number"
++                exit 1
++            fi
+             shift 2
+             ;;
+         sim|real)
+@@ -310,10 +323,12 @@
+ echo "Input type:        $INPUT_TYPE"
+ echo "Output type:       $OUTPUT_TYPE"
+ echo "ZMQ host:          $ZMQ_HOST"
++echo "Reference blend:   ${REFERENCE_BLEND_DURATION}s (Normal mode; 0 disables)"
+ echo ""
+ 
+ RUN_ARGS=("$TARGET" "$CHECKPOINT_DECODER" "$MOTION_DATA" "--obs-config" "$OBS_CONFIG" "--encoder-file" "$CHECKPOINT_ENCODER" "--input-type" "$INPUT_TYPE" "--output-type" "$OUTPUT_TYPE" "--zmq-host" "$ZMQ_HOST")
+ if [[ -n "$PLANNER" ]]; then RUN_ARGS+=("--planner-file" "$PLANNER"); fi
++RUN_ARGS+=("--reference-blend-duration" "$REFERENCE_BLEND_DURATION")
+ RUN_ARGS+=("${EXTRA_ARGS[@]}")
+ 
+ echo -e "${CYAN}Command:${NC}"
+@@ -335,4 +350,4 @@
+     exit 0
+ fi
+ 
+-just run elf3_deploy_onnx_ref "${RUN_ARGS[@]}"+just run elf3_deploy_onnx_ref "${RUN_ARGS[@]}"
+--- a/gear_sonic_deploy/src/elf3/elf3_deploy_onnx_ref/src/elf3_deploy_onnx_ref.cpp
++++ b/gear_sonic_deploy/src/elf3/elf3_deploy_onnx_ref/src/elf3_deploy_onnx_ref.cpp
+@@ -46,6 +46,7 @@
+  *   --policy-fp16         | Use FP16 for policy TensorRT engine
+  *   --motor-kp-scale      | Scale selected hardware motor Kp gains
+  *   --motor-kd-scale      | Scale selected hardware motor Kd gains
++ *   --reference-blend-duration | Normal-mode playback fade duration in seconds (0 disables)
+  */
+ #include <cmath>
+ #include <cuda_runtime_api.h>
+@@ -67,6 +68,18 @@
+ #include <chrono>
+ #include <algorithm>
+ #include <numeric>
++#include <cstdint>
++#include <stdexcept>
++
++// This target uses -ffast-math, which can optimize away std::isfinite checks.
++// Inspect the IEEE-754 exponent so CLI NaN/Inf are rejected in release builds.
++static bool IsValidReferenceBlendDuration(double value) {
++  static_assert(sizeof(double) == sizeof(uint64_t));
++  uint64_t bits = 0;
++  std::memcpy(&bits, &value, sizeof(bits));
++  return (bits & UINT64_C(0x7ff0000000000000)) != UINT64_C(0x7ff0000000000000)
++      && value >= 0.0;
++}
+ 
+ // DDS
+ #include <unitree/robot/channel/channel_publisher.hpp>
+@@ -217,6 +230,21 @@
+     int current_frame_ = 0;
+     int saved_frame_for_observation_window_ = 0; // for observation window
+     std::mutex current_motion_mutex_; // for current motion and frame synchronization
++
++    // Normal-mode paused -> playback reference cross-fade. Control thread only;
++    // all access is under current_motion_mutex_. Source CSV data stays unchanged.
++    double reference_blend_duration_ = 1.0;
++    double reference_blend_elapsed_ = 0.0;
++    double reference_blend_alpha_ = 1.0;
++    bool reference_blend_active_ = false;
++    bool reference_blend_previous_play_ = false;
++    std::shared_ptr<const MotionSequence> reference_blend_previous_motion_;
++    int reference_blend_previous_frame_ = 0;
++    int reference_blend_previous_mode_ = -2;
++    int reference_blend_log_bucket_ = -1;
++    std::vector<double> stand_joint_pos_, blended_joint_pos_, blended_joint_vel_;
++    std::vector<MotionSequence::Point> stand_body_pos_, blended_body_pos_;
++    std::vector<MotionSequence::Quaternion> stand_body_quat_, blended_body_quat_;
+     
+     // =========================================================================
+     // Local motion planner and movement state
+@@ -423,6 +451,129 @@
+     // know how many look-ahead frames are needed before the end.
+     // =========================================================================
+ 
++    void ResetReferenceBlend() {
++      reference_blend_active_ = false;
++      reference_blend_elapsed_ = 0.0;
++      reference_blend_alpha_ = 1.0;
++      reference_blend_log_bucket_ = -1;
++    }
++
++    // Run once before gathering observations, with current_motion_mutex_ held.
++    void UpdateReferenceBlend() {
++      const bool play = operator_state.play;
++      const int mode = current_motion_ ? current_motion_->GetEncodeMode() : -2;
++      const bool context_changed =
++          current_motion_ != reference_blend_previous_motion_ ||
++          mode != reference_blend_previous_mode_ ||
++          current_frame_ < reference_blend_previous_frame_ ||
++          reinitialize_heading_;
++      const bool eligible = reference_blend_duration_ > 0.0 &&
++          is_using_encoder_ && current_motion_ && current_motion_->timesteps > 0 &&
++          current_motion_ != planner_motion_ &&
++          current_motion_->name != "streamed" &&
++          current_motion_->name != "temporary_motion" && mode == 0 &&
++          current_motion_->GetNumJoints() == ELF3_NUM_MOTOR &&
++          !has_upper_body_data_ && !has_vr_3point_data_ && !has_vr_5point_data_;
++
++      if (!play || !eligible || context_changed) {
++        ResetReferenceBlend();
++      }
++      // A repeated T while already playing must not restart the transition.
++      // A changed/reset motion while playing cancels the old transition.
++      if (eligible && play && !reference_blend_previous_play_) {
++        const int frame = std::clamp(current_frame_, 0, current_motion_->timesteps - 1);
++        const auto joint_pos = current_motion_->JointPositions(frame);
++        stand_joint_pos_.assign(joint_pos, joint_pos + current_motion_->GetNumJoints());
++        blended_joint_pos_.resize(stand_joint_pos_.size());
++        blended_joint_vel_.resize(stand_joint_pos_.size());
++        const int bodies = current_motion_->GetNumBodies();
++        if (bodies > 0) {
++          const auto body_pos = current_motion_->BodyPositions(frame);
++          stand_body_pos_.assign(body_pos, body_pos + bodies);
++        } else {
++          stand_body_pos_.clear();
++        }
++        blended_body_pos_.resize(stand_body_pos_.size());
++        const int quaternions = current_motion_->GetNumBodyQuaternions();
++        if (quaternions > 0) {
++          const auto body_quat = current_motion_->BodyQuaternions(frame);
++          stand_body_quat_.assign(body_quat, body_quat + quaternions);
++        } else {
++          stand_body_quat_.clear();
++        }
++        blended_body_quat_.resize(stand_body_quat_.size());
++        reference_blend_elapsed_ = 0.0;
++        reference_blend_active_ = true;
++        reference_blend_log_bucket_ = -1;
++        std::cout << "[ReferenceBlend] Start: motion=" << current_motion_->name
++                  << " frame=" << frame << " duration=" << reference_blend_duration_
++                  << "s" << std::endl;
++      }
++
++      if (reference_blend_active_) {
++        reference_blend_alpha_ = std::clamp(
++            reference_blend_elapsed_ / reference_blend_duration_, 0.0, 1.0);
++        const int bucket = static_cast<int>(reference_blend_alpha_ * 5.0 + 1e-9);
++        if (bucket != reference_blend_log_bucket_) {
++          reference_blend_log_bucket_ = bucket;
++          std::cout << "[ReferenceBlend] alpha=" << reference_blend_alpha_
++                    << " frame=" << current_frame_ << std::endl;
++        }
++        if (reference_blend_alpha_ >= 1.0) {
++          reference_blend_active_ = false;
++          std::cout << "[ReferenceBlend] Complete" << std::endl;
++        }
++      }
++      reference_blend_previous_play_ = play;
++      reference_blend_previous_motion_ = current_motion_;
++      reference_blend_previous_frame_ = current_frame_;
++      reference_blend_previous_mode_ = mode;
++    }
++
++    // Scratch pointers are valid until the next call to the same accessor.
++    // Buffers are sized at transition start, never allocated per future frame.
++    const double* ReadReferenceJointPositions(int frame) {
++      const auto raw = current_motion_->JointPositions(frame);
++      if (!reference_blend_active_) { return raw; }
++      for (size_t j = 0; j < stand_joint_pos_.size(); ++j) {
++        blended_joint_pos_[j] = (1.0 - reference_blend_alpha_) * stand_joint_pos_[j]
++                             + reference_blend_alpha_ * raw[j];
++      }
++      return blended_joint_pos_.data();
++    }
++
++    const double* ReadReferenceJointVelocities(int frame) {
++      const auto raw = current_motion_->JointVelocities(frame);
++      if (!reference_blend_active_) { return raw; }
++      for (size_t j = 0; j < stand_joint_pos_.size(); ++j) {
++        // The paused reference has zero joint velocity.
++        blended_joint_vel_[j] = reference_blend_alpha_ * raw[j];
++      }
++      return blended_joint_vel_.data();
++    }
++
++    const MotionSequence::Point* ReadReferenceBodyPositions(int frame) {
++      const auto raw = current_motion_->BodyPositions(frame);
++      if (!reference_blend_active_ || stand_body_pos_.empty()) { return raw; }
++      for (size_t b = 0; b < stand_body_pos_.size(); ++b) {
++        for (int k = 0; k < 3; ++k) {
++          blended_body_pos_[b][k] = (1.0 - reference_blend_alpha_) * stand_body_pos_[b][k]
++                                 + reference_blend_alpha_ * raw[b][k];
++        }
++      }
++      return blended_body_pos_.data();
++    }
++
++    const MotionSequence::Quaternion* ReadReferenceBodyQuaternions(int frame) {
++      const auto raw = current_motion_->BodyQuaternions(frame);
++      if (!reference_blend_active_ || stand_body_quat_.empty()) { return raw; }
++      for (size_t b = 0; b < stand_body_quat_.size(); ++b) {
++        blended_body_quat_[b] = quat_slerp_d(
++            stand_body_quat_[b], raw[b], reference_blend_alpha_);
++      }
++      return blended_body_quat_.data();
++    }
++
+     /// Gather root Z position from N future frames (1 value per frame).
+     bool GatherMotionRootZPositionMultiFrame(std::vector<double>& target_buffer, size_t offset, int num_frames = 5, int step_size = 5) {
+       if (!current_motion_ || current_motion_->timesteps == 0) { 
+@@ -446,7 +597,7 @@
+           }
+         }
+ 
+-        const auto motion_root_z_pos = current_motion_->BodyPositions(target_frame)[0][2];
++        const auto motion_root_z_pos = ReadReferenceBodyPositions(target_frame)[0][2];
+         target_buffer[offset + frame_idx * 1] = motion_root_z_pos;
+       }
+       return true;
+@@ -476,7 +627,7 @@
+           }
+         }
+ 
+-        const auto motion_body_pos = current_motion_->BodyPositions(target_frame);
++        const auto motion_body_pos = ReadReferenceBodyPositions(target_frame);
+ 
+         // If body part indexes are empty, gather all bodies (all x, y, z coordinates)
+         if (body_part_indexes.empty()) {
+@@ -639,7 +790,7 @@
+         if (first_target_frame >= static_cast<int>(current_motion_->timesteps)) {
+           first_target_frame = static_cast<int>(current_motion_->timesteps) - 1;
+         }
+-        const auto first_body_quat = current_motion_->BodyQuaternions(first_target_frame);
++        const auto first_body_quat = ReadReferenceBodyQuaternions(first_target_frame);
+         auto first_ref_rot = quat_mul_d(apply_delta_heading, first_body_quat[0]);
+         ref_first_heading = calc_heading_quat_d(first_ref_rot);
+       }
+@@ -657,7 +808,7 @@
+         }
+ 
+         // Get reference data root rotation at this target frame (first body part, index 0)
+-        const auto motion_body_quat = current_motion_->BodyQuaternions(target_frame);
++        const auto motion_body_quat = ReadReferenceBodyQuaternions(target_frame);
+         std::array<double, 4> ref_data_root_rot_array = motion_body_quat[0];
+ 
+         // Calculate new reference root rotation with heading applied
+@@ -716,7 +867,7 @@
+       if (first_frame >= static_cast<int>(current_motion_->timesteps)) {
+         first_frame = static_cast<int>(current_motion_->timesteps) - 1;
+       }
+-      const auto first_body_quat = current_motion_->BodyQuaternions(first_frame);
++      const auto first_body_quat = ReadReferenceBodyQuaternions(first_frame);
+       auto ref_root_rot = quat_mul_d(apply_delta_heading, first_body_quat[0]);
+ 
+       // Compute: quat_inv(robot_heading) * ref_first_heading
+@@ -769,7 +920,7 @@
+           }
+         }
+ 
+-        const auto motion_joint_pos = current_motion_->JointPositions(target_frame);
++        const auto motion_joint_pos = ReadReferenceJointPositions(target_frame);
+ 
+         // If body part indexes are empty, gather all joints
+         if (joint_indexes.empty()) {
+@@ -846,7 +997,7 @@
+           target_frame = static_cast<int>(current_motion_->timesteps) - 1;
+         }
+         
+-        const auto motion_joint_vel = current_motion_->JointVelocities(target_frame);
++        const auto motion_joint_vel = ReadReferenceJointVelocities(target_frame);
+ 
+         // If body part indexes are empty, gather all joints
+         if (joint_indexes.empty()) {
+@@ -1130,8 +1281,8 @@
+       
+       // read from current motion
+       int frame = current_frame_ % current_motion_->timesteps;
+-      const auto& motion_body_pos = current_motion_->BodyPositions(frame);
+-      const auto& motion_body_quat = current_motion_->BodyQuaternions(frame);
++      const auto& motion_body_pos = ReadReferenceBodyPositions(frame);
++      const auto& motion_body_quat = ReadReferenceBodyQuaternions(frame);
+ 
+       // VR 3-point offsets in body's local frame (matching ros2_input_handler.hpp and visualize_motion.py)
+       // Order: left_wrist (index 0), right_wrist (index 1), head/torso (index 2)
+@@ -1159,8 +1310,8 @@
+       }
+ 
+       // normalize positions to the root by - root_pos rotate and normalize the root_quat
+-      auto root_pos = current_motion_->BodyPositions(frame)[0];
+-      auto root_quat = current_motion_->BodyQuaternions(frame)[0];
++      auto root_pos = ReadReferenceBodyPositions(frame)[0];
++      auto root_quat = ReadReferenceBodyQuaternions(frame)[0];
+       
+       // Normalize each VR 3-point position relative to root
+       // Apply inverse transformation: subtract root position, then rotate by inverse root quaternion
+@@ -1224,7 +1375,7 @@
+ 
+       // read from current motion
+       int frame = current_frame_ % current_motion_->timesteps;
+-      const auto& motion_body_quat = current_motion_->BodyQuaternions(frame);
++      const auto& motion_body_quat = ReadReferenceBodyQuaternions(frame);
+ 
+       // Copy quaternions to observation buffer (flatten 3x4D quaternions to 12 values)
+       std::array<double, 12> vr_3point_orientation = {
+@@ -1234,7 +1385,7 @@
+       };
+ 
+       // Normalize quaternions relative to root quaternion: quat_mul(quat_inv(root_quat), vr_quat)
+-      auto root_quat = current_motion_->BodyQuaternions(frame)[0];
++      auto root_quat = ReadReferenceBodyQuaternions(frame)[0];
+       auto root_quat_inv = quat_conjugate_d(root_quat); // Get inverse quaternion
+       
+       for (int i = 0; i < 3; ++i) {
+@@ -1288,8 +1439,8 @@
+         
+         // read from current motion
+         int frame = current_frame_ % current_motion_->timesteps;
+-        const auto& motion_body_pos = current_motion_->BodyPositions(frame);
+-        const auto& motion_body_quat = current_motion_->BodyQuaternions(frame);
++        const auto& motion_body_pos = ReadReferenceBodyPositions(frame);
++        const auto& motion_body_quat = ReadReferenceBodyQuaternions(frame);
+ 
+         // VR 3-point offsets in body's local frame (matching ros2_input_handler.hpp and visualize_motion.py)
+         // Order: left_wrist (index 0), right_wrist (index 1), head/torso (index 2)
+@@ -1319,8 +1470,8 @@
+         }
+ 
+         // normalize positions to the root by - root_pos rotate and normalize the root_quat
+-        auto root_pos = current_motion_->BodyPositions(frame)[0];
+-        auto root_quat = current_motion_->BodyQuaternions(frame)[0];
++        auto root_pos = ReadReferenceBodyPositions(frame)[0];
++        auto root_quat = ReadReferenceBodyQuaternions(frame)[0];
+         
+         // Normalize each VR 3-point position relative to root
+         // Apply inverse transformation: subtract root position, then rotate by inverse root quaternion
+@@ -1382,7 +1533,7 @@
+         
+         // read from current motion
+         int frame = current_frame_ % current_motion_->timesteps;
+-        const auto& motion_body_quat = current_motion_->BodyQuaternions(frame);
++        const auto& motion_body_quat = ReadReferenceBodyQuaternions(frame);
+ 
+         // Copy quaternions to observation buffer (flatten 3x4D quaternions to 12 values)
+         std::array<double, 20> vr_5point_orientation = {
+@@ -1394,7 +1545,7 @@
+         };
+ 
+         // Normalize quaternions relative to root quaternion: quat_mul(quat_inv(root_quat), vr_quat)
+-        auto root_quat = current_motion_->BodyQuaternions(frame)[0];
++        auto root_quat = ReadReferenceBodyQuaternions(frame)[0];
+         auto root_quat_inv = quat_conjugate_d(root_quat); // Get inverse quaternion
+         
+         for (int i = 0; i < 5; ++i) {
+@@ -2179,7 +2330,8 @@
+       bool enable_motion_recording = false,
+       std::array<double, 3> initial_compliance = {0.05, 0.05, 0.0},
+       double initial_max_close_ratio = 1.0,
+-      MotorGainScaleConfig motor_gain_scales = {})
++      MotorGainScaleConfig motor_gain_scales = {},
++      double reference_blend_duration = 1.0)
+       : time_(0.0),
+         publish_dt_(0.002),
+         control_dt_(0.02),
+@@ -2201,6 +2353,13 @@
+         //env(ORT_LOGGING_LEVEL_WARNING, "ELF3Deploy"),
+         model_path(model_file_path),
+         planner_path(planner_file_path) {
++
++      if (!IsValidReferenceBlendDuration(reference_blend_duration)) {
++        throw std::invalid_argument("reference blend duration must be finite and >= 0");
++      }
++      reference_blend_duration_ = reference_blend_duration;
++      std::cout << "[ReferenceBlend] Normal-mode playback duration="
++                << reference_blend_duration_ << "s (0 disables)" << std::endl;
+ 
+       const auto kp_scales = format_motor_gain_scales(motor_gain_scales_.kp);
+       const auto kd_scales = format_motor_gain_scales(motor_gain_scales_.kd);
+@@ -3944,6 +4103,9 @@
+             // reset saved frame for observation window before gathering observations so that we can get the latest value
+             saved_frame_for_observation_window_ = 0;
+ 
++            // One alpha for the entire future window, before encoder inference.
++            UpdateReferenceBlend();
++
+             // Update heading state (handles reinitialize_heading_ and frame-0 init)
+             // Must run before any orientation observation functions
+             UpdateHeadingState();
+@@ -3955,6 +4117,10 @@
+               std::cout << "Stopping control system." << std::endl;
+               operator_state.stop = true;
+               return;
++            }
++            if (reference_blend_active_) {
++              reference_blend_elapsed_ = std::min(
++                  reference_blend_duration_, reference_blend_elapsed_ + control_dt_);
+             }
+           } // Release lock after all observation-dependent operations
+ 
+@@ -4166,6 +4332,7 @@
+     std::cout << "  --policy-precision <16|32>: specify precision to run the policy model at (default: 32)" << std::endl;
+     std::cout << "  --motor-kp-scale <motors>=<factor>: scale Kp for hardware motor indices/ranges" << std::endl;
+     std::cout << "  --motor-kd-scale <motors>=<factor>: scale Kd for hardware motor indices/ranges" << std::endl;
++    std::cout << "  --reference-blend-duration <seconds>: Normal-mode paused -> playback fade (default: 1.0, 0 disables)" << std::endl;
+     std::cout << "  --zmq-host <host>: ZMQ server host (default: localhost)" << std::endl;
+     std::cout << "  --zmq-port <port>: ZMQ server port (default: 5556)" << std::endl;
+     std::cout << "  --zmq-topic <topic>: ZMQ topic/prefix (default: pose)" << std::endl;
+@@ -4226,6 +4393,7 @@
+   std::array<double, 3> initial_compliance = {0.5, 0.5, 0.0}; // initial compliance is 0.5 for both hands (keyboard controllable)
+   double initial_max_close_ratio = 1.0; // default allows full closure, use --max-close-ratio to limit
+   MotorGainScaleConfig motor_gain_scales;
++  double reference_blend_duration = 1.0;
+   for (int i = 4; i < argc; i++) {
+     if (std::string(argv[i]) == "--disable-crc-check") {
+       disableCrcCheck = true;
+@@ -4377,6 +4545,23 @@
+       }
+       else{
+         std::cerr << "old and weak" << std::endl;
++      }
++    } else if (std::string(argv[i]) == "--reference-blend-duration") {
++      if (i + 1 >= argc) {
++        std::cerr << "Error: --reference-blend-duration requires seconds" << std::endl;
++        return 1;
++      }
++      const std::string value = argv[++i];
++      try {
++        size_t parsed = 0;
++        reference_blend_duration = std::stod(value, &parsed);
++        if (parsed != value.size() || !IsValidReferenceBlendDuration(reference_blend_duration)) {
++          throw std::invalid_argument("invalid duration");
++        }
++      } catch (const std::exception&) {
++        std::cerr << "Error: --reference-blend-duration must be finite and >= 0: "
++                  << value << std::endl;
++        return 1;
+       }
+     } else if (std::string(argv[i]) == "--motor-kp-scale") {
+       if (!parse_motor_gain_scale_flag(argc, argv, i, motor_gain_scales.kp)) {
+@@ -4496,7 +4681,8 @@
+     enableMotionRecording,
+     initial_compliance,
+     initial_max_close_ratio,
+-    motor_gain_scales
++    motor_gain_scales,
++    reference_blend_duration
+   );
+   std::cout << "[DEBUG] ELF3Deploy object created successfully!" << std::endl;
+   

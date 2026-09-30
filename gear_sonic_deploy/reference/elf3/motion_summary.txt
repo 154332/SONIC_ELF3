@@ -1,0 +1,9 @@
+ELF3 SONIC Deployment Motion Summary
+========================================
+
+Target FPS: 50.0
+Input order: isaaclab
+Quaternion input order: wxyz
+ELF3 DOF: 31
+
+Neutral_walk_forward_002__A057: OK

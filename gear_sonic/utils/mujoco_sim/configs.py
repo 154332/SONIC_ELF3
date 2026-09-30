@@ -15,7 +15,7 @@ import yaml
 
 from gear_sonic.utils.network.network_utils import resolve_interface
 
-WBC_VERSIONS = ["sonic_model12"]
+WBC_VERSIONS = ["sonic_model12", "elf3_sonic"]
 
 @dataclass
 class ArgsConfigTemplate:
@@ -101,7 +101,7 @@ def override_wbc_config(
 
     # Sim-to-real KD gap: waist pitch (index 14) is over-damped in sim;
     # reduce KD by 10 on the real robot to avoid sluggish response
-    if config.env_type == "real":
+    if config.env_type == "real" and "g1" in str(wbc_config.get("ROBOT_TYPE", "")):
         wbc_config["MOTOR_KD"][14] = wbc_config["MOTOR_KD"][14] - 10
 
     return wbc_config
@@ -109,7 +109,7 @@ def override_wbc_config(
 
 @dataclass
 class BaseConfig(ArgsConfigTemplate):
-    """Base config inherited by all G1 control loops"""
+    """Base config inherited by MuJoCo/WBC control loops."""
 
     dataset_version: str = "sonic_model12"
 
@@ -315,10 +315,12 @@ class BaseConfig(ArgsConfigTemplate):
 
         if self.wbc_version == "sonic_model12":
             config_path = str(configs_dir / "g1_29dof_sonic_model12.yaml")
+        elif self.wbc_version == "elf3_sonic":
+            config_path = str(configs_dir / "elf3_sonic.yaml")
         else:
             raise ValueError(
                 f"Invalid wbc_version: {self.wbc_version}, please use one of: "
-                f"sonic_model12"
+                f"{', '.join(WBC_VERSIONS)}"
             )
 
         with open(config_path) as file:

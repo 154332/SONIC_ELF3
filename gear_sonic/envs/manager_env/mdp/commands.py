@@ -173,7 +173,8 @@ class TrackingCommand(CommandTerm):
 
         self.isaaclab_to_mujoco_dof = env.cfg.isaaclab_to_mujoco_mapping["isaaclab_to_mujoco_dof"]
         self.mujoco_to_isaaclab_dof = env.cfg.isaaclab_to_mujoco_mapping["mujoco_to_isaaclab_dof"]
-        self.lower_joint_indices_mujoco = list(range(12))
+        # self.lower_joint_indices_mujoco = list(range(12))
+        self.lower_joint_indices_mujoco = list(range(3, 15))
         self.lower_joint_isaaclab_indices = [
             self.isaaclab_to_mujoco_dof[i] for i in self.lower_joint_indices_mujoco
         ]
@@ -675,7 +676,8 @@ class TrackingCommand(CommandTerm):
         if isaaclab_to_mujoco_mapping is not None:
             inst.isaaclab_to_mujoco_dof = isaaclab_to_mujoco_mapping["isaaclab_to_mujoco_dof"]
             inst.mujoco_to_isaaclab_dof = isaaclab_to_mujoco_mapping["mujoco_to_isaaclab_dof"]
-        inst.lower_joint_indices_mujoco = list(range(12))
+        # inst.lower_joint_indices_mujoco = list(range(12))
+        inst.lower_joint_indices_mujoco = list(range(3, 15))
         if hasattr(inst, "isaaclab_to_mujoco_dof"):
             inst.lower_joint_isaaclab_indices = [
                 inst.isaaclab_to_mujoco_dof[i] for i in inst.lower_joint_indices_mujoco
